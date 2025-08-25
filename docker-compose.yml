@@ -1,0 +1,86 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: grafana
+      POSTGRES_USER: grafana
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: grafana
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: supersecret
+      GF_ANALYTICS_CHECK_FOR_UPDATES: false
+      GF_ANALYTICS_REPORTING_ENABLED: false
+      GF_DATABASE_TYPE: postgres
+      GF_DATABASE_HOST: postgres:5432
+      GF_DATABASE_NAME: grafana
+      GF_DATABASE_USER: grafana
+      GF_DATABASE_PASSWORD: secret
+      GF_DATABASE_SSL_MODE: disable
+      APP_NAME: "APP_NAME"
+      APP_VERSION: "v2.1"
+      APP_ECCN: "ECCN-XYZ"
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -exc
+      - |
+        mkdir -p /var/lib/grafana/plugins
+        chown -R 472:472 /var/lib/grafana || true
+
+        # Plugin installer with fallback
+        install_plugin() {
+          name="$$1"; ver="$$2"; fb="$$3"
+          grafana-cli plugins install "$$name" "$$ver" || grafana-cli plugins install "$$name" "$$fb"
+        }
+
+        install_plugin volkovlabs-form-panel       5.1.0 5.0.0
+        install_plugin volkovlabs-echarts-panel    6.6.0 6.5.0
+        install_plugin volkovlabs-image-panel      6.3.0 6.2.0
+        install_plugin volkovlabs-variable-panel   3.9.0 3.8.0
+        install_plugin volkovlabs-grapi-datasource 3.6.0 3.5.0
+        install_plugin volkovlabs-table-panel      2.7.0 2.6.0
+
+        # Branding text patches
+        sed -i "s|<title>\[\[.AppTitle\]\]</title>|<title>APP_NAME</title>|g" /usr/share/grafana/public/views/index.html || true
+        find /usr/share/grafana/public/build/ -name "*.js" -exec sed -i 's|AppTitle="Grafana"|AppTitle="APP_NAME"|g' {} \; || true
+        find /usr/share/grafana/public/build/ -name "*.js" -exec sed -i 's|Welcome to Grafana|APP_NAME Monitoring|g' {} \; || true
+        find /usr/share/grafana/public/build/ -name "*.js" -exec sed -i 's|Contact your Grafana administrator.|Contact your APP_NAME administrator.|g' {} \; || true
+        find /usr/share/grafana/public/build/ -name "*.js" -exec sed -i 's|{target:"_blank",id:"version",text:`v$${f.version} ($${f.commit})`,url:v?"https://github.com/grafana/grafana/blob/main/CHANGELOG.md":void 0}|{target:"_blank",id:"version",text:"APP_NAME v2.1 ECCN ECCN-XYZ © Copyright 2025 APP_NAME Technologies. All rights reserved."}|g' {} \; || true
+
+        # Drop privileges and start Grafana
+        if command -v su-exec >/dev/null 2>&1; then exec su-exec 472:472 /run.sh; fi
+        if command -v gosu    >/dev/null 2>&1; then exec gosu    472:472 /run.sh; fi
+        exec /run.sh
+
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./provisioning:/etc/grafana/provisioning:ro
+      - ./branding:/opt/branding:ro
+
+volumes:
+  postgres_data: {}
+  grafana_data: {}
